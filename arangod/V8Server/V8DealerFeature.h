@@ -165,6 +165,24 @@ class V8DealerFeature final : public application_features::ApplicationFeature {
       std::function<void(v8::Isolate*, v8::Handle<v8::Context>, size_t)>,
       TRI_vocbase_t*>> _contextUpdates;
 };
+
+
+// enters and exits a context and provides an isolate
+// in case the passed in isolate is a nullptr
+class V8ContextDealerGuard {
+ public:
+  explicit V8ContextDealerGuard(v8::Isolate* context = nullptr, TRI_vocbase_t* = nullptr, bool allowModification = true);
+  V8ContextDealerGuard(V8ContextDealerGuard const&) = delete;
+  V8ContextDealerGuard& operator=(V8ContextDealerGuard const&) = delete;
+  ~V8ContextDealerGuard();
+  v8::Isolate* isolate(); //access the isolate - valid isolate stays unmodified
+
+ private:
+  V8Context* _context;
+  v8::Isolate* _isolate;
+  bool _active;
+};
+
 }
 
 #endif

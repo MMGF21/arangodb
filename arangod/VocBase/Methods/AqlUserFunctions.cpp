@@ -230,19 +230,12 @@ Result arangodb::registerUserFunction(TRI_vocbase_t* vocbase,
   bool isDeterministic = userFunction.get("isDeterministic").getBool();
   /// TODO ^^^ error handling
   
-  V8Context* v8Context = nullptr;
-  
-  ISOLATE;
-  
-  if (isolate == nullptr) {
-    v8Context = V8DealerFeature::DEALER->enterContext(vocbase, true /*allow use database*/);
-    if (!v8Context) {
-      return Result(TRI_ERROR_INTERNAL, "could not acquire v8 context while registering AQL user function");
-    }
-    isolate = v8Context->_isolate;
-  }
-
   {
+    ISOLATE;
+    V8ContextDealerGuard guard(isolate);
+    isolate = guard.isolate();
+    V8Context* v8Context = nullptr //FIXME get correct context - this was already a nullptr for the JS case
+
     std::string testCode("(function() { var callback = ");
     testCode += tmp + "; return callback; })()";
     v8::HandleScope scope(isolate);
@@ -253,7 +246,7 @@ Result arangodb::registerUserFunction(TRI_vocbase_t* vocbase,
       v8::TryCatch tryCatch;
 
       result = TRI_ExecuteJavaScriptString(isolate,
-                                           isolate->GetCurrentContext(),
+                                           isolate->GetCurrentContext(), //v8Conetext?
                                            TRI_V8_STD_STRING(isolate, testCode),
                                            TRI_V8_ASCII_STRING(isolate, "userFunction"),
                                            false);
@@ -271,9 +264,6 @@ Result arangodb::registerUserFunction(TRI_vocbase_t* vocbase,
         }
       }
     }
-  }
-  if (v8Context != nullptr) {
-    V8DealerFeature::DEALER->exitContext(v8Context); /// TODO: bei exception sicher stellen das das passiert
   }
 
   std::string _key(name);
@@ -304,7 +294,7 @@ Result arangodb::registerUserFunction(TRI_vocbase_t* vocbase,
   SingleCollectionTransaction trx(ctx, collectionName, AccessMode::Type::WRITE);
   trx.addHint(transaction::Hints::Hint::SINGLE_OPERATION);
 
-  res.reset(trx.begin());
+  res = trx.begin();
 
   if (!res.ok()) {
     // TODO: this comes from the RestVocbaseBaseHandler generateTransactionError(collectionName, res, "");
@@ -315,18 +305,16 @@ Result arangodb::registerUserFunction(TRI_vocbase_t* vocbase,
   transaction::BuilderLeaser searchBuilder(&trx);
   searchBuilder->add(VPackValue(_key));
   arangodb::velocypack::Builder existDocument;
-  Result exists;
   try {
-    exists = trx.documentFastPath(collectionName, mmdr.get(), searchBuilder->slice(), existDocument, false);
+    res = trx.documentFastPath(collectionName, mmdr.get(), searchBuilder->slice(), existDocument, false);
   } catch (arangodb::basics::Exception const& ex) {
-    exists.reset(ex.code());
+    res.reset(ex.code());
   }
 
   arangodb::OperationResult result;
-  if (exists.ok()){
+  if (res.ok()){
     result = trx.replace(collectionName, oneFunctionDocument.slice(), opOptions);
-  }
-  else {
+  } else {
     result = trx.insert(collectionName, oneFunctionDocument.slice(), opOptions);
   }
   // Will commit if no error occured.
@@ -340,11 +328,12 @@ Result arangodb::registerUserFunction(TRI_vocbase_t* vocbase,
     return res;
   }
 
-  if (!res.ok()) {
+  if (res.fail()) {
     printf("result not ok\n");
     // TODO: this comes from the RestVocbaseBaseHandler     generateTransactionError(collectionName, res, "");
     return res;
   }
+
   reloadAqlUserFunctions();
   // Note: Adding user functions to the _aql namespace is disallowed and will fail.
   return res;
